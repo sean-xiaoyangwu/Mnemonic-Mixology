@@ -1,0 +1,7 @@
+{
+  "name": "Mnemonic Mixology",
+  "description": "Transform your daily emotions into a unique, AI-generated cocktail recipe through voice analysis and data visualization.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
