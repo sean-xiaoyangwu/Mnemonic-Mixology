@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, RotateCcw, History, X, Sparkles, Loader2, Wine, ChevronRight } from 'lucide-react';
+import { Mic, Square, RotateCcw, History, X, Sparkles, Loader2, Wine, ChevronRight, Activity, Terminal } from 'lucide-react';
 import { MemoryMix } from './types';
 import { generateMixologyProfile } from './services/geminiService';
 import MoodRadar from './components/MoodRadar';
@@ -207,6 +207,7 @@ const App: React.FC = () => {
           
           {/* Left: Analysis */}
           <div className="lg:col-span-5 flex flex-col items-center lg:items-start h-full justify-center">
+             {/* Radar Chart */}
              <div className="w-full aspect-square max-w-sm relative mb-8">
                 <MoodRadar data={currentMix?.emotions || {joy:0, melancholy:0, stress:0, energy:0, mystery:0}} color={currentMix?.cocktail.colorHex || '#C5A059'} />
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -214,10 +215,49 @@ const App: React.FC = () => {
                    <div className="h-full w-px bg-gradient-to-b from-transparent via-subtle-gray to-transparent opacity-20 absolute left-1/2"></div>
                 </div>
              </div>
+
+             {/* NLP Diagnostics Panel */}
+             <div className={`w-full max-w-sm border-t border-luxury-gray pt-6 mt-2 transition-all duration-1000 delay-500 
+                ${stage === 'SERVED' ? 'opacity-100' : 'opacity-0'}
+             `}>
+                <div className="flex items-center gap-2 mb-4 text-luxury-gold">
+                  <Terminal size={12} />
+                  <span className="text-xs font-mono uppercase tracking-widest">NLP Diagnostics</span>
+                </div>
+                
+                {currentMix?.nlpAnalysis && (
+                  <div className="grid grid-cols-2 gap-4 font-mono text-xs text-subtle-gray">
+                    <div className="flex flex-col gap-1">
+                      <span className="uppercase text-[10px] tracking-widest opacity-50">Polarity</span>
+                      <span className="text-luxury-text">
+                        {currentMix.nlpAnalysis.sentiment_score > 0 ? '+' : ''}{currentMix.nlpAnalysis.sentiment_score.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="uppercase text-[10px] tracking-widest opacity-50">Subjectivity</span>
+                      <span className="text-luxury-text">
+                        {(currentMix.nlpAnalysis.subjectivity_score * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="uppercase text-[10px] tracking-widest opacity-50">Irony</span>
+                      <span className="text-luxury-text">
+                        {currentMix.nlpAnalysis.irony_probability > 0.6 ? 'DETECTED' : 'LOW'}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="uppercase text-[10px] tracking-widest opacity-50">Sentiment</span>
+                      <span className={`text-luxury-text ${currentMix.nlpAnalysis.dominant_sentiment === 'Positive' ? 'text-green-400' : currentMix.nlpAnalysis.dominant_sentiment === 'Negative' ? 'text-red-400' : 'text-gray-400'}`}>
+                        {currentMix.nlpAnalysis.dominant_sentiment.toUpperCase()}
+                      </span>
+                    </div>
+                  </div>
+                )}
+             </div>
              
-             <div className={`w-full transition-all duration-1000 delay-500 ${stage === 'SERVED' ? 'opacity-50' : 'opacity-100'}`}>
-               <h3 className="text-xs font-mono uppercase tracking-widest text-luxury-gold mb-4">Input Transcript</h3>
-               <p className="text-xl md:text-2xl font-serif leading-relaxed text-luxury-text italic">
+             {/* Transcript (Visual fade out slightly to focus on data) */}
+             <div className={`w-full mt-6 transition-all duration-1000 delay-500 ${stage === 'SERVED' ? 'opacity-40 hover:opacity-100 transition-opacity' : 'opacity-100'}`}>
+               <p className="text-sm font-serif leading-relaxed text-luxury-text italic">
                   "{transcript}"
                </p>
              </div>
@@ -272,6 +312,14 @@ const App: React.FC = () => {
                      </div>
                      <h4 className="text-xl font-serif text-luxury-text group-hover:text-luxury-gold transition-colors mb-1">{mix.cocktail.name}</h4>
                      <p className="text-sm text-subtle-gray line-clamp-2 font-light">{mix.cocktail.description}</p>
+                     
+                     {/* Archive NLP Tag */}
+                     {mix.nlpAnalysis && (
+                        <div className="flex gap-2 mt-2">
+                           <span className="text-[10px] border border-subtle-gray px-1 text-subtle-gray font-mono">{mix.nlpAnalysis.dominant_sentiment}</span>
+                           {mix.nlpAnalysis.irony_probability > 0.6 && <span className="text-[10px] border border-subtle-gray px-1 text-subtle-gray font-mono">IRONY</span>}
+                        </div>
+                     )}
                   </div>
                ))}
                {archive.length === 0 && <p className="text-subtle-gray text-center text-sm italic mt-20">Your collection is empty.</p>}

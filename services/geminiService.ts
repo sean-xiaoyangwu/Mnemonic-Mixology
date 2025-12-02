@@ -9,6 +9,18 @@ const responseSchema: Schema = {
       type: Type.STRING, 
       description: "A verbatim transcription of the user's audio input, or the text input provided." 
     },
+    nlp_analysis: {
+      type: Type.OBJECT,
+      description: "Technical NLP analysis of the input text, simulating a RoBERTa-base sentiment model.",
+      properties: {
+        dominant_sentiment: { type: Type.STRING, enum: ["Positive", "Negative", "Neutral"] },
+        sentiment_score: { type: Type.NUMBER, description: "Float between -1.0 (Negative) and 1.0 (Positive)" },
+        subjectivity_score: { type: Type.NUMBER, description: "Float between 0.0 (Objective) and 1.0 (Subjective)" },
+        irony_probability: { type: Type.NUMBER, description: "Float between 0.0 and 1.0 indicating likelihood of irony/sarcasm" },
+        hate_speech_probability: { type: Type.NUMBER, description: "Float between 0.0 and 1.0 safety check" },
+      },
+      required: ["dominant_sentiment", "sentiment_score", "subjectivity_score", "irony_probability", "hate_speech_probability"]
+    },
     emotions: {
       type: Type.OBJECT,
       properties: {
@@ -38,11 +50,16 @@ const responseSchema: Schema = {
         glassType: { type: Type.STRING, description: "Recommended glass (e.g., Coupe, Highball, Rocks)" },
         colorHex: { type: Type.STRING, description: "A hex color code representing the drink's liquid color" },
         garnish: { type: Type.STRING, description: "Recommended garnish" },
+        hardware_instructions: {
+          type: Type.ARRAY,
+          items: { type: Type.NUMBER },
+          description: "Exact array of 4 integers representing milliliters for Pumps 1-4. Pump 1: Base Spirit, Pump 2: Liqueur/Modifier, Pump 3: Juice/Acid, Pump 4: Syrup/Sweetener. Example: [45, 15, 20, 10]"
+        }
       },
-      required: ["name", "description", "ingredients", "instructions", "glassType", "colorHex", "garnish"],
+      required: ["name", "description", "ingredients", "instructions", "glassType", "colorHex", "garnish", "hardware_instructions"],
     },
   },
-  required: ["transcript", "emotions", "cocktail"],
+  required: ["transcript", "nlp_analysis", "emotions", "cocktail"],
 };
 
 export type AudioInput = {
@@ -51,23 +68,42 @@ export type AudioInput = {
 };
 
 export const generateMixologyProfile = async (input: string | AudioInput): Promise<Omit<MemoryMix, 'id' | 'timestamp'>> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API Key is missing");
+  // Support both standard Node process.env and Vite's import.meta.env
+  const apiKey = (import.meta as any).env?.VITE_API_KEY || process.env.API_KEY;
+
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please set VITE_API_KEY in your .env file.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
 
   const systemInstruction = `
-    You are a master mixologist and an empathetic psychologist running a high-end, magical speakeasy.
-    Your goal is to listen to the user's story about their day and distill it into a unique cocktail recipe.
+    You are an advanced dual-core system: 
+    1. A rigorous NLP Engine (simulating tweetnlp/RoBERTa) for text analysis.
+    2. A Master Mixologist & Psychologist for creative synthesis.
+
+    PROCESS:
+    1. Transcribe/Ingest the user's input about their day.
     
-    1. If audio is provided, transcribe it accurately as the 'transcript'. If text is provided, use it as the transcript.
-    2. Analyze the sentiment of the content and quantify it into 5 dimensions (Joy, Melancholy, Stress, Energy, Mystery) on a scale of 0-100.
-    3. Create a custom cocktail recipe that metaphorically and flavor-wise matches their mood. 
-       - High stress? Maybe something herbal and calming or stiff and strong.
-       - High joy? Bubbly, bright, citrusy.
-       - Melancholy? Smoky, complex, bitter-sweet.
-    4. Provide a poetic description of why this drink fits their day.
+    2. PERFORM TECHNICAL NLP ANALYSIS:
+       - Determine the Dominant Sentiment (Positive/Negative/Neutral).
+       - Calculate a Polarity Score (-1.0 to 1.0).
+       - Assess Subjectivity (0.0 Fact-based to 1.0 Opinion/Emotion-based).
+       - Detect potential Irony/Sarcasm (0.0 to 1.0).
+    
+    3. PERFORM EMOTIONAL MAPPING:
+       - Map the nuance of the text to 5 dimensions: Joy, Melancholy, Stress, Energy, Mystery (0-100).
+    
+    4. CONCOCT RECIPE & HARDWARE INSTRUCTIONS:
+       - Create a unique cocktail that chemically represents the user's state.
+       - TRANSLATE the recipe into controls for a 4-Pump Machine:
+         * Pump 1 (Base Spirit): e.g., Vodka, Gin, Whiskey.
+         * Pump 2 (Modifier): e.g., Vermouth, Campari, Liqueur.
+         * Pump 3 (Acid/Juice): e.g., Lemon, Lime.
+         * Pump 4 (Sweet/Syrup): e.g., Simple Syrup, Honey, Grenadine.
+       - You MUST populate 'hardware_instructions' with exactly 4 integers representing MILLILITERS (e.g., [50, 20, 15, 10]).
+       - If a category isn't used, set it to 0. Total volume should be roughly 80-120ml.
+    
     5. Return ONLY JSON matching the provided schema.
   `;
 
@@ -86,7 +122,7 @@ export const generateMixologyProfile = async (input: string | AudioInput): Promi
     }
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash', // Using Flash for multimodal speed
+      model: 'gemini-2.5-flash', 
       contents: [
         {
           role: 'user',
@@ -105,7 +141,19 @@ export const generateMixologyProfile = async (input: string | AudioInput): Promi
     if (!text) throw new Error("No response from AI");
 
     const data = JSON.parse(text);
-    return data as Omit<MemoryMix, 'id' | 'timestamp'>;
+    
+    return {
+      transcript: data.transcript,
+      emotions: data.emotions,
+      nlpAnalysis: data.nlp_analysis,
+      cocktail: {
+        ...data.cocktail,
+        // Map the snake_case JSON response to camelCase TS type if needed, 
+        // though our schema uses snake_case for hardware_instructions to match prompt, let's remap
+        hardwareInstructions: data.cocktail.hardware_instructions || [0,0,0,0]
+      }
+    } as Omit<MemoryMix, 'id' | 'timestamp'>;
+    
   } catch (error) {
     console.error("Gemini Mixology Error:", error);
     throw error;
