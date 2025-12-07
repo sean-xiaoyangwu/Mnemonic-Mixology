@@ -17,6 +17,10 @@ let port: SerialPort | null = null;
 let writer: WritableStreamDefaultWriter | null = null;
 let isSimulationMode = false;
 
+// Mapping based on provided Arduino Sketch
+// int pumpPins[7] = { 3, 5, 6, 9, 10, 11, 12 };
+const PIN_MAPPING = [3, 5, 6, 9, 10, 11, 12];
+
 export const connectToArduino = async (): Promise<boolean> => {
     // Reset state
     isSimulationMode = false;
@@ -96,17 +100,25 @@ export const disconnectArduino = async () => {
 };
 
 export const sendPourCommand = async (amounts: number[]): Promise<boolean> => {
-    // Format: "ml1,ml2,ml3,ml4\n"
+    // Format: "ml1,ml2,ml3,ml4,ml5,ml6,ml7\n"
     const dataString = amounts.join(',') + '\n';
 
     // 1. Handle Simulation Mode
     if (isSimulationMode) {
-        console.log("%c[ARDUINO SIMULATION]", "color: #C5A059; font-weight: bold; font-size: 12px;");
-        console.log(`Command Received: ${dataString.trim()}`);
-        console.log(`Pump 1: ${amounts[0]}ml`);
-        console.log(`Pump 2: ${amounts[1]}ml`);
-        console.log(`Pump 3: ${amounts[2]}ml`);
-        console.log(`Pump 4: ${amounts[3]}ml`);
+        console.log("%c[ARDUINO SIMULATION]", "color: #C5A059; font-weight: bold; font-size: 12px; border: 1px solid #C5A059; padding: 4px;");
+        console.log(`Payload: ${dataString.trim()}`);
+        console.log("------------------------------------------------");
+        
+        const labels = ["Sour", "Sweet", "Bitter", "Fruit", "Vodka", "Whisky", "Soda"];
+        
+        amounts.forEach((ml, index) => {
+            if (ml > 0) {
+                const pin = PIN_MAPPING[index];
+                console.log(`➤ Pump ${index + 1} (PIN ${pin}) | ${labels[index]}: ${ml}ml`);
+            }
+        });
+        
+        console.log("------------------------------------------------");
         
         // Simulate network delay
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -124,7 +136,7 @@ export const sendPourCommand = async (amounts: number[]): Promise<boolean> => {
         const data = encoder.encode(dataString);
         
         await writer.write(data);
-        console.log("Sent to Real Arduino:", dataString);
+        console.log("Sent to Real Arduino (Pins 3,5,6,9,10,11,12):", dataString);
         return true;
     } catch (error) {
         console.error("Error writing to serial:", error);

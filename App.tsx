@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, RotateCcw, History, X, Sparkles, Loader2, Wine, ChevronRight, Activity, Terminal } from 'lucide-react';
-import { MemoryMix } from './types';
-import { generateMixologyProfile } from './services/geminiService';
+import { Mic, Square, RotateCcw, History, X, BookOpen, Loader2, Wine, ChevronRight, Activity, Terminal, Star } from 'lucide-react';
+import { MemoryMix, FeedbackData, LearnedContext } from './types';
+import { generateMixologyProfile, generateSpeech, analyzeFeedbackContext } from './services/geminiService';
+import { base64ToUint8Array, pcmToAudioBuffer } from './services/audioUtils';
 import MoodRadar from './components/MoodRadar';
 import CocktailDisplay from './components/CocktailDisplay';
+import TheoryLibrary from './components/TheoryLibrary';
 
 // Define the stages of the user journey
 type AppStage = 'IDLE' | 'RECORDING' | 'PROCESSING' | 'ANALYZING' | 'SERVED';
@@ -12,21 +14,71 @@ const App: React.FC = () => {
   // --- State ---
   const [stage, setStage] = useState<AppStage>('IDLE');
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isTheoryOpen, setIsTheoryOpen] = useState(false);
   const [currentMix, setCurrentMix] = useState<MemoryMix | null>(null);
   const [archive, setArchive] = useState<MemoryMix[]>([]);
+  const [learnedContexts, setLearnedContexts] = useState<LearnedContext[]>([]); // New State
   const [error, setError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [title, setTitle] = useState("Mnemonic");
 
+  // --- Audio Feedback System ---
+  const sysAudioCtx = useRef<AudioContext | null>(null);
+  const sysAudioSource = useRef<AudioBufferSourceNode | null>(null);
+
+  const playSystemVoice = async (text: string) => {
+    try {
+      // Stop any currently playing system voice to avoid overlap
+      if (sysAudioSource.current) {
+        try { sysAudioSource.current.stop(); } catch(e) {}
+      }
+
+      // Initialize context if needed (requires user interaction first, which happens via buttons)
+      if (!sysAudioCtx.current) {
+        sysAudioCtx.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      }
+      
+      const base64 = await generateSpeech(text);
+      const audioData = base64ToUint8Array(base64);
+      const buffer = pcmToAudioBuffer(audioData, sysAudioCtx.current);
+      
+      const source = sysAudioCtx.current.createBufferSource();
+      source.buffer = buffer;
+      source.connect(sysAudioCtx.current.destination);
+      source.start();
+      sysAudioSource.current = source;
+    } catch (e) {
+      console.error("System voice error", e);
+    }
+  };
+
+  const stopSystemVoice = () => {
+    if (sysAudioSource.current) {
+      try { sysAudioSource.current.stop(); } catch(e) {}
+      sysAudioSource.current = null;
+    }
+  };
+
   // --- Initialization ---
   useEffect(() => {
-    const stored = localStorage.getItem('mnemonic_mixology_archive');
-    if (stored) {
+    // Load Archive
+    const storedArchive = localStorage.getItem('mnemonic_mixology_archive');
+    if (storedArchive) {
       try {
-        setArchive(JSON.parse(stored));
+        setArchive(JSON.parse(storedArchive));
       } catch (e) {
         console.error("Failed to load archive", e);
       }
+    }
+
+    // Load Learned Contexts
+    const storedLearned = localStorage.getItem('mnemonic_mixology_learned');
+    if (storedLearned) {
+        try {
+            setLearnedContexts(JSON.parse(storedLearned));
+        } catch (e) {
+            console.error("Failed to load learned contexts", e);
+        }
     }
 
     // Title animation loop
@@ -42,6 +94,7 @@ const App: React.FC = () => {
 
   const startRecording = async () => {
     setError(null);
+    stopSystemVoice(); // Stop any previous speech
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -79,6 +132,8 @@ const App: React.FC = () => {
     if (mediaRecorderRef.current && stage === 'RECORDING') {
       mediaRecorderRef.current.stop();
       setStage('PROCESSING');
+      // Trigger the transition voice
+      playSystemVoice("Converting your story into liquid data.");
     }
   };
 
@@ -98,6 +153,8 @@ const App: React.FC = () => {
       setStage('ANALYZING');
       
       setTimeout(() => {
+        // Stop the "Converting..." voice if it's still playing before the new one starts
+        stopSystemVoice();
         setStage('SERVED');
       }, 4000);
 
@@ -112,11 +169,57 @@ const App: React.FC = () => {
     }
   };
 
+  const handleUpdateFeedback = async (feedback: FeedbackData) => {
+    if (!currentMix) return;
+
+    // 1. Update current mix locally
+    const updatedMix = { ...currentMix, feedback };
+    setCurrentMix(updatedMix);
+
+    // 2. Update archive
+    const updatedArchive = archive.map(mix => 
+        mix.id === updatedMix.id ? updatedMix : mix
+    );
+    setArchive(updatedArchive);
+    localStorage.setItem('mnemonic_mixology_archive', JSON.stringify(updatedArchive));
+
+    // 3. LEARN from feedback (if notes are provided)
+    if (feedback.notes.length > 5) {
+        // Optimistic UI: Don't block the UI, process in background
+        playSystemVoice("Analyzing your feedback for future calibration.");
+        
+        try {
+            const learned = await analyzeFeedbackContext(
+                currentMix.cocktail.name,
+                currentMix.emotions,
+                feedback.notes,
+                feedback.adjustment
+            );
+            
+            const newContext: LearnedContext = {
+                id: Date.now().toString(),
+                timestamp: Date.now(),
+                ...learned
+            };
+
+            const updatedLearned = [newContext, ...learnedContexts];
+            setLearnedContexts(updatedLearned);
+            localStorage.setItem('mnemonic_mixology_learned', JSON.stringify(updatedLearned));
+            
+        } catch (e) {
+            console.error("Learning failed", e);
+        }
+    }
+  };
+
   const resetApp = () => {
+    stopSystemVoice();
     setStage('IDLE');
     setCurrentMix(null);
     setTranscript('');
     setError(null);
+    // Optional: Prompt the user to start again
+    playSystemVoice("I am ready to listen.");
   };
 
   // --- UI Components ---
@@ -133,13 +236,22 @@ const App: React.FC = () => {
           </h1>
         </div>
         
-        <button 
-          onClick={() => setIsHistoryOpen(true)}
-          className="group flex items-center gap-2 text-xs uppercase tracking-widest text-subtle-gray hover:text-luxury-gold transition-colors"
-        >
-          <span>Archive</span>
-          <History size={14} />
-        </button>
+        <div className="flex items-center gap-8">
+            <button 
+                onClick={() => setIsTheoryOpen(true)}
+                className="group flex items-center gap-2 text-xs uppercase tracking-widest text-subtle-gray hover:text-luxury-text transition-colors"
+            >
+                <span>Library</span>
+                <BookOpen size={14} />
+            </button>
+            <button 
+                onClick={() => setIsHistoryOpen(true)}
+                className="group flex items-center gap-2 text-xs uppercase tracking-widest text-subtle-gray hover:text-luxury-gold transition-colors"
+            >
+                <span>Archive</span>
+                <History size={14} />
+            </button>
+        </div>
       </header>
 
       {/* Main Stage */}
@@ -267,10 +379,18 @@ const App: React.FC = () => {
           <div className={`lg:col-span-7 flex flex-col items-center lg:items-end transition-all duration-1000 delay-700
              ${stage === 'SERVED' ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-10'}
           `}>
-             {currentMix && <CocktailDisplay cocktail={currentMix.cocktail} />}
+             {currentMix && (
+                <CocktailDisplay 
+                    cocktail={currentMix.cocktail} 
+                    emotions={currentMix.emotions}
+                    nlpMetrics={currentMix.nlpAnalysis} 
+                    existingFeedback={currentMix.feedback}
+                    onSubmitFeedback={handleUpdateFeedback}
+                />
+             )}
              
              {stage === 'SERVED' && (
-               <div className="mt-12 flex justify-center lg:justify-end w-full animate-fade-in">
+               <div className="mt-12 flex justify-center lg:justify-end w-full animate-fade-in pb-12">
                  <button 
                    onClick={resetApp}
                    className="group flex items-center gap-4 px-8 py-4 bg-luxury-gray hover:bg-subtle-gray text-luxury-text transition-all duration-300 rounded-sm"
@@ -313,19 +433,34 @@ const App: React.FC = () => {
                      <h4 className="text-xl font-serif text-luxury-text group-hover:text-luxury-gold transition-colors mb-1">{mix.cocktail.name}</h4>
                      <p className="text-sm text-subtle-gray line-clamp-2 font-light">{mix.cocktail.description}</p>
                      
-                     {/* Archive NLP Tag */}
-                     {mix.nlpAnalysis && (
-                        <div className="flex gap-2 mt-2">
-                           <span className="text-[10px] border border-subtle-gray px-1 text-subtle-gray font-mono">{mix.nlpAnalysis.dominant_sentiment}</span>
-                           {mix.nlpAnalysis.irony_probability > 0.6 && <span className="text-[10px] border border-subtle-gray px-1 text-subtle-gray font-mono">IRONY</span>}
-                        </div>
-                     )}
+                     <div className="flex justify-between items-center mt-3">
+                        {/* Archive NLP Tag */}
+                        {mix.nlpAnalysis && (
+                            <div className="flex gap-2">
+                            <span className="text-[10px] border border-subtle-gray px-1 text-subtle-gray font-mono">{mix.nlpAnalysis.dominant_sentiment}</span>
+                            </div>
+                        )}
+                        {/* Star Rating Tag */}
+                        {mix.feedback && (
+                            <div className="flex items-center gap-1 text-luxury-gold">
+                                <Star size={10} fill="currentColor"/>
+                                <span className="text-xs font-mono">{mix.feedback.rating}</span>
+                            </div>
+                        )}
+                     </div>
                   </div>
                ))}
                {archive.length === 0 && <p className="text-subtle-gray text-center text-sm italic mt-20">Your collection is empty.</p>}
             </div>
          </div>
       </div>
+      
+      {/* Theory Modal - NOW WITH LEARNED CONTEXTS */}
+      <TheoryLibrary 
+        isOpen={isTheoryOpen} 
+        onClose={() => setIsTheoryOpen(false)} 
+        customContexts={learnedContexts} 
+      />
       
       {/* Overlay for sidebar */}
       {isHistoryOpen && (
